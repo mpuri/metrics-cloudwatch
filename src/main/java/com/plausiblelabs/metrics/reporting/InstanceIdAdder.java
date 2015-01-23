@@ -18,25 +18,26 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.amazonaws.services.cloudwatch.model.Dimension;
-import com.yammer.metrics.core.Metric;
-import com.yammer.metrics.core.MetricName;
-import com.yammer.metrics.core.MetricPredicate;
+import com.codahale.metrics.Metric;
+import com.codahale.metrics.MetricFilter;
 
 class InstanceIdAdder implements DimensionAdder {
+
     private static final Logger LOG = LoggerFactory.getLogger(InstanceIdAdder.class);
 
-    private final MetricPredicate predicate;
+    private final MetricFilter predicate;
 
     private Collection<Dimension> toSend = Collections.singletonList(new Dimension().withName("InstanceId").withValue("unknown"));
+
     private boolean attemptedFetchingInstanceId;
     private String instanceId;
     private long lastAttemptMillis;
 
-    public InstanceIdAdder(MetricPredicate predicate) {
+    public InstanceIdAdder(MetricFilter predicate) {
         this.predicate = predicate;
     }
 
-    public InstanceIdAdder(MetricPredicate predicate, String instanceId) {
+    public InstanceIdAdder(MetricFilter predicate, String instanceId) {
         this(predicate);
         setInstanceId(instanceId);
     }
@@ -78,7 +79,7 @@ class InstanceIdAdder implements DimensionAdder {
     }
 
     @Override
-    public Collection<Dimension> generate(MetricName name, Metric metric) {
+    public Collection<Dimension> generate(String name, Metric metric) {
         if (!predicate.matches(name, metric)) {
             return Collections.emptyList();
         }

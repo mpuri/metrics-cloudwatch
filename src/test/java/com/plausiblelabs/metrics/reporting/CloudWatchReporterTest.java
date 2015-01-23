@@ -9,30 +9,22 @@ import org.junit.Test;
 import com.amazonaws.services.cloudwatch.model.MetricDatum;
 import com.amazonaws.services.cloudwatch.model.StandardUnit;
 import com.google.common.collect.Sets;
-import com.yammer.metrics.core.Counter;
-import com.yammer.metrics.core.Gauge;
-import com.yammer.metrics.core.MetricsRegistry;
-import com.yammer.metrics.core.Timer;
-import com.yammer.metrics.core.VirtualMachineMetrics;
+import com.codahale.metrics.*;
 
 import static junit.framework.Assert.assertEquals;
 import static junit.framework.Assert.assertTrue;
 
 public class CloudWatchReporterTest {
+
     // Use a separate registry for each test to keep the metrics apart
-    private MetricsRegistry testRegistry = new MetricsRegistry();
+    private MetricRegistry testRegistry = new MetricRegistry();
     private DummyCloudWatchClient client = new DummyCloudWatchClient();
     private CloudWatchReporter.Enabler enabler =
         new CloudWatchReporter.Enabler("testnamespace", client).withRegistry(testRegistry);
 
-    @After
-    public void shutdownRegistry() {
-        testRegistry.shutdown();
-    }
-
     @Test
     public void testDefaultSentMetrics() throws IOException, InterruptedException {
-        enabler.build().run();
+        enabler.build().start(1, TimeUnit.MILLISECONDS);
         assertEquals(2, client.putData.size());
         for (MetricDatum datum : client.putData) {
             assertTrue(datum.getDimensions().isEmpty());
@@ -42,7 +34,7 @@ public class CloudWatchReporterTest {
 
     @Test
     public void testInstanceIdDimension() throws IOException, InterruptedException {
-        enabler.withInstanceIdDimension("flask").build().run();
+        enabler.withInstanceIdDimension("flask").build().start(1, TimeUnit.MILLISECONDS);
         assertEquals(2, client.putData.size());
         for (MetricDatum datum : client.putData) {
             assertEquals(1, datum.getDimensions().size());
@@ -53,34 +45,23 @@ public class CloudWatchReporterTest {
 
     @Test
     public void testDisablingDefaults() throws IOException, InterruptedException {
-        enabler.withJVMMemory(false).build().run();
         assertEquals(0, client.putData.size());
-    }
-
-    @Test
-    public void testAllJVMMetricsSent() throws IOException, InterruptedException {
-        enabler.withJVMThreadState(true).withJVMGC(true).build().run();
-        assertEquals(2 + // memory metrics
-            Thread.State.values().length + 2 + // Thread metrics
-            VirtualMachineMetrics.getInstance().garbageCollectors().size() * 2, // GC metrics
-            client.putData.size());
     }
 
     @Test
     public void testTimer() {
         enabler
-            .withJVMMemory(false)
             .withFiveMinuteRate(true)
             .withOneMinuteRate(false)
             .withTimerSummary(true)
             .withPercentiles(.1, .5, .9, .999);
-        Timer timer = testRegistry.newTimer(CloudWatchReporterTest.class, "TestTimer", TimeUnit.MINUTES, TimeUnit.MINUTES);
+        Timer timer = testRegistry.timer("TestTimer");
         for (int i = 0; i < 100; i++) {
             for (int j = 0; j < 50; j++) {
                 timer.update(i, TimeUnit.MINUTES);
             }
         }
-        enabler.build().run();
+        enabler.build().start(1L, TimeUnit.MINUTES);
         assertEquals(9, client.putData.size());
         assertEquals(Sets.newHashSet("com.plausiblelabs.metrics.reporting.CloudWatchReporterTest.TestTimer.median",
                                      "com.plausiblelabs.metrics.reporting.CloudWatchReporterTest.TestTimer_percentile_0.999",
@@ -100,40 +81,16 @@ public class CloudWatchReporterTest {
     }
 
     @Test
-    public void testUnsupportedGaugeType() {
-        testRegistry.newGauge(CloudWatchReporterTest.class, "TestGague", new Gauge<String>() {
-            @Override
-            public String value() {
-                return "A value!";
-            }
-        });
-        enabler.withJVMMemory(false).build().run();
-        assertEquals(0, client.putData.size());
-    }
-
-    @Test
-    public void testSupportedGaugeType() {
-        testRegistry.newGauge(CloudWatchReporterTest.class, "TestGague", new Gauge<Double>() {
-            @Override
-            public Double value() {
-                return 5.0;
-            }
-        });
-        enabler.withJVMMemory(false).build().run();
-        assertEquals(1, client.putData.size());
-    }
-
-    @Test
     public void testCounter() {
-        Counter counter = testRegistry.newCounter(CloudWatchReporterTest.class, "TestCounter");
-        CloudWatchReporter reporter = enabler.withJVMMemory(false).build();
-        reporter.run();
+        Counter counter = testRegistry.counter("TestCounter");
+        CloudWatchReporter reporter = enabler.build();
+        reporter.start(1L, TimeUnit.MILLISECONDS);
         assertEquals(1, client.putData.size());
         assertEquals(0.0, client.putData.get(0).getValue());
         assertEquals(StandardUnit.Count.toString(), client.putData.get(0).getUnit());
         counter.inc();
         client.putData.clear();
-        reporter.run();
+        reporter.start(1L, TimeUnit.MILLISECONDS);
         assertEquals(1.0, client.putData.get(0).getValue());
 
     }
