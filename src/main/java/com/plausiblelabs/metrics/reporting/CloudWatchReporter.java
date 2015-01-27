@@ -299,8 +299,6 @@ public class CloudWatchReporter extends ScheduledReporter {
 
     private final StandardUnit standardDurationUnit;
 
-    private PutMetricDataRequest putReq;
-
     private CloudWatchReporter(MetricRegistry registry, String namespace, AmazonCloudWatchClient client,
                                MetricFilter predicate, TimeUnit rateUnit, TimeUnit durationUnit, List<DimensionAdder> dimensionAdders,
                                double[] percentilesToSend, boolean sendOneMinute,
@@ -325,54 +323,45 @@ public class CloudWatchReporter extends ScheduledReporter {
     @Override @SuppressWarnings("rawtypes")
     public void report(SortedMap<String, Gauge> gauges, SortedMap<String, Counter> counters, SortedMap<String, Histogram> histograms,
                        SortedMap<String, Meter> meters, SortedMap<String, Timer> timers) {
-        putReq = new PutMetricDataRequest().withNamespace(namespace);
+        PutMetricDataRequest putMetricDataRequest = new PutMetricDataRequest().withNamespace(namespace);
         final Date context = new Date(clock.getTime());
         for (Map.Entry<String, Gauge> entry : gauges.entrySet()) {
-            processGauge(entry.getKey(), entry.getValue(), context);
+            putMetricDataRequest = processGauge(putMetricDataRequest, entry.getKey(), entry.getValue(), context);
         }
         for (Map.Entry<String, Counter> entry : counters.entrySet()) {
-            processCounter(entry.getKey(), entry.getValue(), context);
+            putMetricDataRequest = processCounter(putMetricDataRequest, entry.getKey(), entry.getValue(), context);
         }
         for (Map.Entry<String, Histogram> entry : histograms.entrySet()) {
-            processHistogram(entry.getKey(), entry.getValue(), context);
+            putMetricDataRequest = processHistogram(putMetricDataRequest, entry.getKey(), entry.getValue(), context);
         }
         for (Map.Entry<String, Meter> entry : meters.entrySet()) {
-            processMeter(entry.getKey(), entry.getValue(), context);
+            putMetricDataRequest = processMeter(putMetricDataRequest, entry.getKey(), entry.getValue(), context);
         }
         for (Map.Entry<String, Timer> entry : timers.entrySet()) {
-            processTimer(entry.getKey(), entry.getValue(), context);
+            putMetricDataRequest = processTimer(putMetricDataRequest, entry.getKey(), entry.getValue(), context);
         }
-        putReq = new PutMetricDataRequest().withNamespace(namespace);
         try {
-            sendToCloudWatch();
+            sendToCloudWatch(putMetricDataRequest);
         } catch (Exception e) {
-            if (LOG.isDebugEnabled()) {
-                LOG.debug("Error writing to CloudWatch", e);
-            } else {
-                LOG.warn("Error writing to CloudWatch: {}", e.getMessage());
-            }
-        } finally {
-            putReq = null;
+            LOG.error("Error writing to CloudWatch: {}", e.getMessage());
         }
     }
 
-    private void sendToCloudWatch() {
+    private void sendToCloudWatch(PutMetricDataRequest putMetricDataRequest) {
         try {
-            if (sendToCloudWatch && !putReq.getMetricData().isEmpty()) {
-                client.putMetricData(putReq);
+            if (sendToCloudWatch && !putMetricDataRequest.getMetricData().isEmpty()) {
+                client.putMetricData(putMetricDataRequest);
             }
         } catch (RuntimeException re) {
-            LOG.warn("Failed writing to CloudWatch: {}", putReq);
+            LOG.warn("Failed writing to CloudWatch: {}", re.getMessage());
+            LOG.warn("  failed CloudWatch put request: {}", putMetricDataRequest);
             throw re;
-        } finally {
-            // Be sure the putReq cleared; a failure indicates bad data, so we don't want to try again
-            putReq = new PutMetricDataRequest().withNamespace(namespace);
         }
     }
 
     private boolean sentTooSmall, sentTooLarge;
 
-    private void sendValue(Date timestamp, String name, double value, StandardUnit unit, List<Dimension> dimensions) {
+    private PutMetricDataRequest sendValue(PutMetricDataRequest putMetricDataRequest, Date timestamp, String name, double value, StandardUnit unit, List<Dimension> dimensions) {
         double absValue = Math.abs(value);
         if (absValue < SMALLEST_SENDABLE) {
             if (absValue > 0) {// Allow 0 through untouched, everything else gets rounded to SMALLEST_SENDABLE
@@ -405,13 +394,15 @@ public class CloudWatchReporter extends ScheduledReporter {
                 .withDimensions(dimensions)
                 .withUnit(unit);
 
-        LOG.debug("Sending {}", datum);
-        putReq.withMetricData(datum);
+        LOG.debug("Sending to CloudWatch {}", datum);
+        putMetricDataRequest.withMetricData(datum);
 
         // Can only send 20 metrics at a time
-        if (putReq.getMetricData().size() == 20) {
-            sendToCloudWatch();
+        if (putMetricDataRequest.getMetricData().size() == 20) {
+            sendToCloudWatch(putMetricDataRequest);
+            putMetricDataRequest = new PutMetricDataRequest().withNamespace(namespace);
         }
+        return putMetricDataRequest;
     }
 
     private List<Dimension> createDimensions(String name, Metric metric) {
@@ -422,70 +413,74 @@ public class CloudWatchReporter extends ScheduledReporter {
         return dimensions;
     }
 
-    public void processGauge(String name, Gauge<?> gauge, Date context) {
+    public PutMetricDataRequest processGauge(PutMetricDataRequest putMetricDataRequest, String name, Gauge<?> gauge, Date context) {
         if (gauge.getValue() instanceof Number) {
-            sendValue(context, name, ((Number) gauge.getValue()).doubleValue(), StandardUnit.None, createDimensions(name, gauge));
+            return sendValue(putMetricDataRequest, context, name, ((Number) gauge.getValue()).doubleValue(), StandardUnit.None, createDimensions(name, gauge));
         } else if (unsendable.add(name)) {
             LOG.warn("The type of the value for {} is {}. It must be a subclass of Number to send to CloudWatch.", name, gauge.getValue().getClass());
         }
+        return putMetricDataRequest;
     }
 
-    public void processCounter(String name, Counter counter, Date context) {
-        sendValue(context, name, counter.getCount(), StandardUnit.Count, createDimensions(name, counter));
+    public PutMetricDataRequest processCounter(PutMetricDataRequest putMetricDataRequest, String name, Counter counter, Date context) {
+        return sendValue(putMetricDataRequest, context, name, counter.getCount(), StandardUnit.Count, createDimensions(name, counter));
     }
 
-    public void processMeter(String name, Metered meter, Date context) {
+    public PutMetricDataRequest processMeter(PutMetricDataRequest putMetricDataRequest, String name, Metered meter, Date context) {
         List<Dimension> dimensions = createDimensions(name, meter);
         if (sendOneMinute) {
-            sendValue(context, name + ".1MinuteRate", meter.getOneMinuteRate(), StandardUnit.None, dimensions);
+            putMetricDataRequest = sendValue(putMetricDataRequest, context, name + ".1MinuteRate", meter.getOneMinuteRate(), StandardUnit.None, dimensions);
         }
         if (sendFiveMinute) {
-            sendValue(context, name + ".5MinuteRate", meter.getFiveMinuteRate(), StandardUnit.None, dimensions);
+            putMetricDataRequest = sendValue(putMetricDataRequest, context, name + ".5MinuteRate", meter.getFiveMinuteRate(), StandardUnit.None, dimensions);
         }
         if (sendFifteenMinute) {
-            sendValue(context, name + ".15MinuteRate", meter.getFifteenMinuteRate(), StandardUnit.None, dimensions);
+            putMetricDataRequest = sendValue(putMetricDataRequest, context, name + ".15MinuteRate", meter.getFifteenMinuteRate(), StandardUnit.None, dimensions);
         }
         if (sendMeterSummary) {
-            sendValue(context, name + ".count", meter.getCount(), StandardUnit.Count, dimensions);
-            sendValue(context, name + ".meanRate", meter.getMeanRate(), StandardUnit.None, dimensions);
+            putMetricDataRequest = sendValue(putMetricDataRequest, context, name + ".count", meter.getCount(), StandardUnit.Count, dimensions);
+            putMetricDataRequest = sendValue(putMetricDataRequest, context, name + ".meanRate", meter.getMeanRate(), StandardUnit.None, dimensions);
         }
+        return putMetricDataRequest;
     }
 
-    public void processHistogram(String name, Histogram histogram, Date context) {
+    public PutMetricDataRequest processHistogram(PutMetricDataRequest putMetricDataRequest, String name, Histogram histogram, Date context) {
         List<Dimension> dimensions = createDimensions(name, histogram);
         Snapshot snapshot = histogram.getSnapshot();
         for (double percentile : percentilesToSend) {
             if (percentile == .5) {
-                sendValue(context, name + ".median", snapshot.getMedian(), StandardUnit.None, dimensions);
+                putMetricDataRequest = sendValue(putMetricDataRequest, context, name + ".median", snapshot.getMedian(), StandardUnit.None, dimensions);
             } else {
-                sendValue(context, name + "_percentile_" + percentile, snapshot.getValue(percentile), StandardUnit.None, dimensions);
+                putMetricDataRequest = sendValue(putMetricDataRequest, context, name + "_percentile_" + percentile, snapshot.getValue(percentile), StandardUnit.None, dimensions);
             }
         }
         if (sendHistoLifetime) {
-            sendValue(context, name + ".min", snapshot.getMin(), StandardUnit.None, dimensions);
-            sendValue(context, name + ".max", snapshot.getMax(), StandardUnit.None, dimensions);
-            sendValue(context, name + ".mean", snapshot.getMean(), StandardUnit.None, dimensions);
-            sendValue(context, name + ".stddev", snapshot.getStdDev(), StandardUnit.None, dimensions);
+            putMetricDataRequest = sendValue(putMetricDataRequest, context, name + ".min", snapshot.getMin(), StandardUnit.None, dimensions);
+            putMetricDataRequest = sendValue(putMetricDataRequest, context, name + ".max", snapshot.getMax(), StandardUnit.None, dimensions);
+            putMetricDataRequest = sendValue(putMetricDataRequest, context, name + ".mean", snapshot.getMean(), StandardUnit.None, dimensions);
+            putMetricDataRequest = sendValue(putMetricDataRequest, context, name + ".stddev", snapshot.getStdDev(), StandardUnit.None, dimensions);
         }
+        return putMetricDataRequest;
     }
 
-    public void processTimer(String name, Timer timer, Date context) {
-        processMeter(name, timer, context);
+    public PutMetricDataRequest processTimer(PutMetricDataRequest putMetricDataRequest, String name, Timer timer, Date context) {
+        putMetricDataRequest = processMeter(putMetricDataRequest, name, timer, context);
         List<Dimension> dimensions = createDimensions(name, timer);
         Snapshot snapshot = timer.getSnapshot();
         for (double percentile : percentilesToSend) {
             if (percentile == .5) {
-                sendValue(context, name + ".median", convertDuration(snapshot.getMedian()), standardDurationUnit, dimensions);
+                putMetricDataRequest = sendValue(putMetricDataRequest, context, name + ".median", convertDuration(snapshot.getMedian()), standardDurationUnit, dimensions);
             } else {
-                sendValue(context, name + "_percentile_" + percentile, convertDuration(snapshot.getValue(percentile)), standardDurationUnit, dimensions);
+                putMetricDataRequest = sendValue(putMetricDataRequest, context, name + "_percentile_" + percentile, convertDuration(snapshot.getValue(percentile)), standardDurationUnit, dimensions);
             }
         }
         if (sendTimerLifetime) {
-            sendValue(context, name + ".min", convertDuration(timer.getSnapshot().getMin()), standardDurationUnit, dimensions);
-            sendValue(context, name + ".max", convertDuration(timer.getSnapshot().getMax()), standardDurationUnit, dimensions);
-            sendValue(context, name + ".mean", convertDuration(timer.getSnapshot().getMean()), standardDurationUnit, dimensions);
-            sendValue(context, name + ".stddev", convertDuration(timer.getSnapshot().getStdDev()), standardDurationUnit, dimensions);
+            putMetricDataRequest = sendValue(putMetricDataRequest, context, name + ".min", convertDuration(timer.getSnapshot().getMin()), standardDurationUnit, dimensions);
+            putMetricDataRequest = sendValue(putMetricDataRequest, context, name + ".max", convertDuration(timer.getSnapshot().getMax()), standardDurationUnit, dimensions);
+            putMetricDataRequest = sendValue(putMetricDataRequest, context, name + ".mean", convertDuration(timer.getSnapshot().getMean()), standardDurationUnit, dimensions);
+            putMetricDataRequest = sendValue(putMetricDataRequest, context, name + ".stddev", convertDuration(timer.getSnapshot().getStdDev()), standardDurationUnit, dimensions);
         }
+        return putMetricDataRequest;
     }
 
     private StandardUnit convertDurationUnit(TimeUnit durationUnit) {
