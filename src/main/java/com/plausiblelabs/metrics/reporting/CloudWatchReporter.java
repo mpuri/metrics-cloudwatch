@@ -1,6 +1,7 @@
 package com.plausiblelabs.metrics.reporting;
 
 import com.amazonaws.auth.AWSCredentials;
+import com.amazonaws.auth.AWSCredentialsProvider;
 import com.amazonaws.services.cloudwatch.AmazonCloudWatchClient;
 import com.amazonaws.services.cloudwatch.model.Dimension;
 import com.amazonaws.services.cloudwatch.model.MetricDatum;
@@ -76,8 +77,8 @@ public class CloudWatchReporter extends ScheduledReporter {
          *
          * @param namespace the namespace. Must be non-null and not empty.
          */
-        public Enabler(String namespace, AWSCredentials creds) {
-            this(namespace, new AmazonCloudWatchClient(creds));
+        public Enabler(String namespace, AWSCredentialsProvider awsCredentialsProvider) {
+            this(namespace, new AmazonCloudWatchClient(awsCredentialsProvider));
         }
 
         /**
