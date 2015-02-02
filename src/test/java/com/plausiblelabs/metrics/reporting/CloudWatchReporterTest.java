@@ -3,7 +3,6 @@ package com.plausiblelabs.metrics.reporting;
 import java.io.IOException;
 import java.util.concurrent.TimeUnit;
 
-import org.junit.After;
 import org.junit.Test;
 
 import com.amazonaws.services.cloudwatch.model.MetricDatum;
@@ -12,7 +11,6 @@ import com.google.common.collect.Sets;
 import com.codahale.metrics.*;
 
 import static junit.framework.Assert.assertEquals;
-import static junit.framework.Assert.assertTrue;
 
 public class CloudWatchReporterTest {
 
@@ -23,19 +21,18 @@ public class CloudWatchReporterTest {
         new CloudWatchReporter.Enabler("testnamespace", client).withRegistry(testRegistry);
 
     @Test
-    public void testDefaultSentMetrics() throws IOException, InterruptedException {
-        enabler.build().start(1, TimeUnit.MILLISECONDS);
-        assertEquals(2, client.putData.size());
-        for (MetricDatum datum : client.putData) {
-            assertTrue(datum.getDimensions().isEmpty());
-            assertTrue(datum.getMetricName().startsWith("jvm.memory"));
-        }
+    public void defaultSentMetrics() throws IOException, InterruptedException {
+        CloudWatchReporter reporter = enabler.build();
+        reporter.report();
+        assertEquals(0, client.putData.size());
     }
 
     @Test
-    public void testInstanceIdDimension() throws IOException, InterruptedException {
-        enabler.withInstanceIdDimension("flask").build().start(1, TimeUnit.MILLISECONDS);
-        assertEquals(2, client.putData.size());
+    public void instanceIdDimension() throws IOException, InterruptedException {
+        Counter counter = testRegistry.counter("TestCounter");
+        CloudWatchReporter reporter = enabler.withInstanceIdDimension("flask").build();
+        reporter.report();
+        assertEquals(1, client.putData.size());
         for (MetricDatum datum : client.putData) {
             assertEquals(1, datum.getDimensions().size());
             assertEquals("InstanceId", datum.getDimensions().get(0).getName());
@@ -44,12 +41,12 @@ public class CloudWatchReporterTest {
     }
 
     @Test
-    public void testDisablingDefaults() throws IOException, InterruptedException {
+    public void disablingDefaults() throws IOException, InterruptedException {
         assertEquals(0, client.putData.size());
     }
 
     @Test
-    public void testTimer() {
+    public void timer() {
         enabler
             .withFiveMinuteRate(true)
             .withOneMinuteRate(false)
@@ -61,36 +58,37 @@ public class CloudWatchReporterTest {
                 timer.update(i, TimeUnit.MINUTES);
             }
         }
-        enabler.build().start(1L, TimeUnit.MINUTES);
+        CloudWatchReporter reporter = enabler.build();
+        reporter.report();
         assertEquals(9, client.putData.size());
-        assertEquals(Sets.newHashSet("com.plausiblelabs.metrics.reporting.CloudWatchReporterTest.TestTimer.median",
-                                     "com.plausiblelabs.metrics.reporting.CloudWatchReporterTest.TestTimer_percentile_0.999",
-                                     "com.plausiblelabs.metrics.reporting.CloudWatchReporterTest.TestTimer_percentile_0.9",
-                                     "com.plausiblelabs.metrics.reporting.CloudWatchReporterTest.TestTimer.mean",
-                                     "com.plausiblelabs.metrics.reporting.CloudWatchReporterTest.TestTimer.5MinuteRate",
-                                     "com.plausiblelabs.metrics.reporting.CloudWatchReporterTest.TestTimer.min",
-                                     "com.plausiblelabs.metrics.reporting.CloudWatchReporterTest.TestTimer.max",
-                                     "com.plausiblelabs.metrics.reporting.CloudWatchReporterTest.TestTimer.stddev",
-                                     "com.plausiblelabs.metrics.reporting.CloudWatchReporterTest.TestTimer_percentile_0.1"),
+        assertEquals(Sets.newHashSet("TestTimer.median",
+                                     "TestTimer_percentile_0.999",
+                                     "TestTimer_percentile_0.9",
+                                     "TestTimer.mean",
+                                     "TestTimer.5MinuteRate",
+                                     "TestTimer.min",
+                                     "TestTimer.max",
+                                     "TestTimer.stddev",
+                                     "TestTimer_percentile_0.1"),
                      client.latestPutByName.keySet());
-        MetricDatum min = client.latestPutByName.get("com.plausiblelabs.metrics.reporting.CloudWatchReporterTest.TestTimer.min");
-        assertEquals("The recorded minutes were converted to seconds for CloudWatch", StandardUnit.Seconds.toString(), min.getUnit());
+        MetricDatum min = client.latestPutByName.get("TestTimer.min");
+        assertEquals("The recorded minutes were converted to milliseconds for CloudWatch", StandardUnit.Milliseconds.toString(), min.getUnit());
         assertEquals(0.0, min.getValue());
-        MetricDatum percentile999 = client.latestPutByName.get("com.plausiblelabs.metrics.reporting.CloudWatchReporterTest.TestTimer_percentile_0.999");
-        assertEquals("The recorded minutes were converted to seconds for CloudWatch", 5940.0, percentile999.getValue());
+        MetricDatum percentile999 = client.latestPutByName.get("TestTimer_percentile_0.999");
+        assertEquals("The recorded minutes were converted to milliseconds for CloudWatch", 5940000.0, percentile999.getValue());
     }
 
     @Test
-    public void testCounter() {
+    public void counter() {
         Counter counter = testRegistry.counter("TestCounter");
         CloudWatchReporter reporter = enabler.build();
-        reporter.start(1L, TimeUnit.MILLISECONDS);
+        reporter.report();
         assertEquals(1, client.putData.size());
         assertEquals(0.0, client.putData.get(0).getValue());
         assertEquals(StandardUnit.Count.toString(), client.putData.get(0).getUnit());
         counter.inc();
         client.putData.clear();
-        reporter.start(1L, TimeUnit.MILLISECONDS);
+        reporter.report();
         assertEquals(1.0, client.putData.get(0).getValue());
 
     }
