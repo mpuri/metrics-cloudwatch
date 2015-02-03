@@ -13,7 +13,8 @@ import java.util.Collections;
 import org.apache.http.HttpResponse;
 import org.apache.http.HttpStatus;
 import org.apache.http.client.methods.HttpGet;
-import org.apache.http.impl.client.DefaultHttpClient;
+import org.apache.http.impl.client.CloseableHttpClient;
+import org.apache.http.impl.client.HttpClientBuilder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -52,8 +53,7 @@ class InstanceIdAdder implements DimensionAdder {
     }
 
     private void fetchInstanceId() {
-        DefaultHttpClient httpClient = new DefaultHttpClient();
-        try {
+        try (CloseableHttpClient httpClient = HttpClientBuilder.create().build()) {
             HttpGet get = new HttpGet("http://169.254.169.254/latest/meta-data/instance-id");
             HttpResponse resp = httpClient.execute(get);
             if (resp.getStatusLine().getStatusCode() != HttpStatus.SC_OK) {
@@ -74,7 +74,6 @@ class InstanceIdAdder implements DimensionAdder {
         } finally {
             attemptedFetchingInstanceId = true;
             lastAttemptMillis = System.currentTimeMillis();
-            httpClient.getConnectionManager().shutdown();
         }
     }
 
