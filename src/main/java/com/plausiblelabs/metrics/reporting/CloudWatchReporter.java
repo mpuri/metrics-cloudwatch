@@ -1,6 +1,5 @@
 package com.plausiblelabs.metrics.reporting;
 
-import com.amazonaws.auth.AWSCredentials;
 import com.amazonaws.auth.AWSCredentialsProvider;
 import com.amazonaws.services.cloudwatch.AmazonCloudWatchClient;
 import com.amazonaws.services.cloudwatch.model.Dimension;
@@ -356,7 +355,6 @@ public class CloudWatchReporter extends ScheduledReporter {
         } catch (RuntimeException re) {
             LOG.warn("Failed writing to CloudWatch: {}", re.getMessage());
             LOG.warn("  failed CloudWatch put request: {}", putMetricDataRequest);
-            throw re;
         }
     }
 
