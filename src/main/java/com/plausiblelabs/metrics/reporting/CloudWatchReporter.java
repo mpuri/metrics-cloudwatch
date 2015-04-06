@@ -355,6 +355,9 @@ public class CloudWatchReporter extends ScheduledReporter {
         } catch (RuntimeException re) {
             LOG.warn("Failed writing to CloudWatch: {}", re.getMessage());
             LOG.warn("  failed CloudWatch put request: {}", putMetricDataRequest);
+            if (!re.getMessage().contains("Rate exceeded")) {
+                throw re;
+            }
         }
     }
 
